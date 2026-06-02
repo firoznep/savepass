@@ -24,6 +24,20 @@ function base64ToBytes(base64: string): Uint8Array {
   return Uint8Array.from(binString, (char) => char.charCodeAt(0));
 }
 
+function getSubtleCrypto(): SubtleCrypto {
+  if (typeof window === "undefined") {
+    throw new Error("Cryptography functions can only be executed in the browser.");
+  }
+
+  if (!window.isSecureContext || !window.crypto?.subtle) {
+    throw new Error(
+      "Secure browser cryptography is unavailable. Open this app over HTTPS, or use localhost for development.",
+    );
+  }
+
+  return window.crypto.subtle;
+}
+
 /**
  * Derives both the Encryption Key and the Authentication Hash from the master password and email.
  * This implements the 512-bit key derivation split.
@@ -38,11 +52,7 @@ export async function deriveKeys(password: string, email: string): Promise<{
   authHash: string;
   keyDerivationSalt: string;
 }> {
-  if (typeof window === 'undefined') {
-    throw new Error('Cryptography functions can only be executed in the browser.');
-  }
-
-  const subtle = window.crypto.subtle;
+  const subtle = getSubtleCrypto();
   
   // Create a unique salt using the user's email to prevent rainbow table attacks
   const saltString = `safepass-salt-v1-${email.toLowerCase().trim()}`;
@@ -104,11 +114,7 @@ export async function encryptText(
   plaintext: string,
   encryptionKey: CryptoKey
 ): Promise<{ ciphertext: string; iv: string }> {
-  if (typeof window === 'undefined') {
-    throw new Error('Cryptography functions can only be executed in the browser.');
-  }
-
-  const subtle = window.crypto.subtle;
+  const subtle = getSubtleCrypto();
   const plaintextBytes = stringToBytes(plaintext);
   
   // AES-GCM requires a 12-byte IV
@@ -139,11 +145,7 @@ export async function decryptText(
   iv: string,
   encryptionKey: CryptoKey
 ): Promise<string> {
-  if (typeof window === 'undefined') {
-    throw new Error('Cryptography functions can only be executed in the browser.');
-  }
-
-  const subtle = window.crypto.subtle;
+  const subtle = getSubtleCrypto();
   const ciphertextBytes = base64ToBytes(ciphertext);
   const ivBytes = base64ToBytes(iv);
 

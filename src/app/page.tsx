@@ -26,9 +26,15 @@ interface DecryptedVaultItem {
 }
 
 export default function SafePassApp() {
+  const browserCryptoError =
+    "Secure browser cryptography is unavailable. Open this app over HTTPS, or use localhost for development.";
+
   // Authentication & Cryptography State
   const [user, setUser] = useState<{ id: string; email: string } | null>(null);
   const [encryptionKey, setEncryptionKey] = useState<CryptoKey | null>(null);
+  const [isCryptoAvailable, setIsCryptoAvailable] = useState<boolean | null>(
+    null,
+  );
   const [isAppLoading, setIsAppLoading] = useState(true);
   const [isDerivingKey, setIsDerivingKey] = useState(false);
   const [viewState, setViewState] = useState<"login" | "register" | "unlock">(
@@ -67,6 +73,10 @@ export default function SafePassApp() {
 
   // Check if session is already active on mount
   useEffect(() => {
+    setIsCryptoAvailable(
+      window.isSecureContext && Boolean(window.crypto?.subtle),
+    );
+
     async function checkSession() {
       try {
         const res = await fetch("/api/auth/me");
@@ -175,6 +185,11 @@ export default function SafePassApp() {
       return;
     }
 
+    if (isCryptoAvailable === false) {
+      setAuthError(browserCryptoError);
+      return;
+    }
+
     setIsDerivingKey(true);
 
     try {
@@ -241,6 +256,11 @@ export default function SafePassApp() {
 
     if (!email || !password) {
       setAuthError("Email and Master Password are required.");
+      return;
+    }
+
+    if (isCryptoAvailable === false) {
+      setAuthError(browserCryptoError);
       return;
     }
 
@@ -508,6 +528,9 @@ export default function SafePassApp() {
             </div>
           </div>
 
+          {isCryptoAvailable === false && (
+            <div className="alert alert-danger">{browserCryptoError}</div>
+          )}
           {authError && <div className="alert alert-danger">{authError}</div>}
           {authSuccess && (
             <div className="alert alert-success">{authSuccess}</div>
@@ -536,7 +559,7 @@ export default function SafePassApp() {
                 type="submit"
                 className="btn btn-primary"
                 style={{ width: "100%", marginTop: "1rem" }}
-                disabled={isDerivingKey}
+                disabled={isDerivingKey || isCryptoAvailable === false}
               >
                 {isDerivingKey ? (
                   <>
@@ -613,7 +636,7 @@ export default function SafePassApp() {
                 type="submit"
                 className="btn btn-primary"
                 style={{ width: "100%", marginTop: "1rem" }}
-                disabled={isDerivingKey}
+                disabled={isDerivingKey || isCryptoAvailable === false}
               >
                 {isDerivingKey ? (
                   <>
@@ -668,7 +691,7 @@ export default function SafePassApp() {
                 type="submit"
                 className="btn btn-primary"
                 style={{ width: "100%", marginTop: "1rem" }}
-                disabled={isDerivingKey}
+                disabled={isDerivingKey || isCryptoAvailable === false}
               >
                 {isDerivingKey ? (
                   <>

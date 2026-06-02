@@ -1,8 +1,5 @@
 -- PostgreSQL Schema for SafePass Password Manager
 
--- Enable UUID extension (built-in in Postgres 13+, but safe to verify)
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
 -- Drop tables if they exist (for clean setup/reset if needed)
 DROP TABLE IF EXISTS vault_items;
 DROP TABLE IF EXISTS users;

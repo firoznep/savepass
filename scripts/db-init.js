@@ -2,94 +2,113 @@ const { Client } = require("pg");
 const fs = require("fs");
 const path = require("path");
 
-// .env.local example
-// DB_HOST=127.0.0.1
-// DB_PORT=60700
-// DB_USER=postgres
-// DB_PASSWORD=
-// DB_NAME=safepass
-// JWT_SECRET=safepass_jwt_secret_token_key_9988776655
-// NODE_ENV=development
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
 
-// We first connect to the default 'postgres' database to ensure the 'safepass' database exists.
-// We will try ports 5432 and 5433 to find which one is active.
-const ports = [60700, 5433, 5432];
-const hosts = ["localhost", "127.0.0.1", "::1"];
-const passwords = ["postgres", "", "password", "admin"];
+  const envFile = fs.readFileSync(filePath, "utf8");
+  for (const line of envFile.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
 
-async function findActiveConnection() {
-  for (const port of ports) {
-    for (const host of hosts) {
-      for (const password of passwords) {
-        console.log(
-          `Testing connection to PostgreSQL on ${host}:${port} with user 'postgres' and password '${password}'...`,
-        );
-        const client = new Client({
-          host: host,
-          port: port,
-          user: "postgres",
-          password: password,
-          database: "postgres",
-        });
+    const separatorIndex = trimmed.indexOf("=");
+    if (separatorIndex === -1) {
+      continue;
+    }
 
-        try {
-          await client.connect();
-          console.log(
-            `Successfully connected on ${host}:${port} with password '${password}'!`,
-          );
-          await client.end();
-          return { host, port, password };
-        } catch (err) {
-          console.log(
-            `Failed to connect on ${host}:${port} with password '${password}': ${err.message}`,
-          );
-        }
-      }
+    const key = trimmed.slice(0, separatorIndex).trim();
+    const rawValue = trimmed.slice(separatorIndex + 1).trim();
+    const value = rawValue.replace(/^['"]|['"]$/g, "");
+
+    if (!process.env[key]) {
+      process.env[key] = value;
     }
   }
-  throw new Error(
-    "Could not connect to PostgreSQL on any host/port/password combination. Please check if PostgreSQL is running.",
-  );
+}
+
+function quoteIdentifier(identifier) {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(identifier)) {
+    throw new Error(`Invalid PostgreSQL identifier: ${identifier}`);
+  }
+
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
+function getConfig(database) {
+  return {
+    host: process.env.DB_HOST || "127.0.0.1",
+    port: parseInt(process.env.DB_PORT || "60700", 10),
+    user: process.env.DB_USER || "postgres",
+    password: process.env.DB_PASSWORD || "",
+    database,
+  };
+}
+
+function printAuthHelp(err) {
+  const message = err && err.message ? err.message : "";
+  if (
+    err.code === "28000" ||
+    message.includes("Ident authentication failed") ||
+    message.includes("Peer authentication failed")
+  ) {
+    console.error("");
+    console.error("PostgreSQL rejected the configured user via Ident/peer auth.");
+    console.error(
+      "Your app is using DB_HOST=%s DB_PORT=%s DB_USER=%s DB_NAME=%s.",
+      process.env.DB_HOST || "127.0.0.1",
+      process.env.DB_PORT || "60700",
+      process.env.DB_USER || "postgres",
+      process.env.DB_NAME || "safepass",
+    );
+    console.error("");
+    console.error("For local development, enable password auth for local TCP connections,");
+    console.error("then set a password on the role and put the same value in .env.local:");
+    console.error("  # In pg_hba.conf, use scram-sha-256 or md5 for 127.0.0.1/32");
+    console.error("  # Example: host all all 127.0.0.1/32 scram-sha-256");
+    console.error("  sudo systemctl reload postgresql");
+    console.error("  sudo -u postgres psql -c \"ALTER USER postgres PASSWORD 'postgres';\"");
+    console.error("  DB_PASSWORD=postgres");
+    console.error("");
+    console.error("Then restart `next dev` so the pool picks up the new env value.");
+  }
 }
 
 async function init() {
   try {
-    const { host, port, password } = await findActiveConnection();
+    loadEnvFile(path.join(__dirname, "..", ".env.local"));
 
-    // Connect to postgres to create the database if not exists
-    const adminClient = new Client({
-      host: host,
-      port: port,
-      user: "postgres",
-      password: password,
-      database: "postgres",
-    });
+    const databaseName = process.env.DB_NAME || "safepass";
+    const adminClient = new Client(getConfig("postgres"));
 
+    console.log(
+      "Connecting to PostgreSQL on %s:%s as '%s'...",
+      process.env.DB_HOST || "127.0.0.1",
+      process.env.DB_PORT || "60700",
+      process.env.DB_USER || "postgres",
+    );
     await adminClient.connect();
 
-    // Check if safepass database exists
+    // Check if the application database exists.
     const dbCheck = await adminClient.query(
-      "SELECT 1 FROM pg_database WHERE datname = 'safepass'",
+      "SELECT 1 FROM pg_database WHERE datname = $1",
+      [databaseName],
     );
     if (dbCheck.rowCount === 0) {
-      console.log("Database 'safepass' does not exist. Creating it...");
+      console.log(`Database '${databaseName}' does not exist. Creating it...`);
       // CREATE DATABASE cannot run inside a transaction block, so we execute it directly
-      await adminClient.query("CREATE DATABASE safepass");
-      console.log("Database 'safepass' created successfully!");
+      await adminClient.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);
+      console.log(`Database '${databaseName}' created successfully!`);
     } else {
-      console.log("Database 'safepass' already exists.");
+      console.log(`Database '${databaseName}' already exists.`);
     }
     await adminClient.end();
 
-    // Now connect to 'safepass' database and run the schema SQL
-    console.log("Connecting to 'safepass' database to apply schema...");
-    const appClient = new Client({
-      host: host,
-      port: port,
-      user: "postgres",
-      password: password,
-      database: "safepass",
-    });
+    // Now connect to the application database and run the schema SQL.
+    console.log(`Connecting to '${databaseName}' database to apply schema...`);
+    const appClient = new Client(getConfig(databaseName));
 
     await appClient.connect();
 
@@ -105,6 +124,7 @@ async function init() {
     await appClient.end();
     console.log("PostgreSQL setup completed successfully!");
   } catch (err) {
+    printAuthHelp(err);
     console.error("Database initialization failed:", err);
     process.exit(1);
   }
