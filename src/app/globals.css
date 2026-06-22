@@ -536,7 +536,11 @@ textarea::placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
+<<<<<<< HEAD
   padding: 1rem;
+=======
+  padding: 1.5rem;
+>>>>>>> a72f531c066cd5c7d1e794b95cee76c46498f5ad
   z-index: 1000;
 }
 

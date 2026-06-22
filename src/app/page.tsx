@@ -165,7 +165,11 @@ export default function SafePassApp() {
   };
 
   // Perform client-side registration
+<<<<<<< HEAD
   const handleRegister = async (e: React.SubmitEvent<HTMLFormElement>) => {
+=======
+  const handleRegister = async (e: React.FormEvent) => {
+>>>>>>> a72f531c066cd5c7d1e794b95cee76c46498f5ad
     e.preventDefault();
     setAuthError("");
     setAuthSuccess("");
@@ -250,7 +254,11 @@ export default function SafePassApp() {
   };
 
   // Perform client-side login or unlock
+<<<<<<< HEAD
   const handleLogin = async (e: React.SubmitEvent<HTMLFormElement>) => {
+=======
+  const handleLogin = async (e: React.FormEvent) => {
+>>>>>>> a72f531c066cd5c7d1e794b95cee76c46498f5ad
     e.preventDefault();
     setAuthError("");
 
@@ -350,7 +358,11 @@ export default function SafePassApp() {
   };
 
   // Encrypt and save entry (Add or Edit)
+<<<<<<< HEAD
   const handleSaveEntry = async (e: React.SubmitEvent<HTMLFormElement>) => {
+=======
+  const handleSaveEntry = async (e: React.FormEvent) => {
+>>>>>>> a72f531c066cd5c7d1e794b95cee76c46498f5ad
     e.preventDefault();
     setModalError("");
 
@@ -725,7 +737,11 @@ export default function SafePassApp() {
 
   // RENDER: Dashboard Flow
   return (
+<<<<<<< HEAD
     <div className="container ">
+=======
+    <div className="container animate-fade-in">
+>>>>>>> a72f531c066cd5c7d1e794b95cee76c46498f5ad
       {/* Header */}
       <header className="app-header">
         <div className="app-brand">
