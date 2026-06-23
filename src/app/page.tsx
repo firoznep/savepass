@@ -807,16 +807,17 @@ export default function SafePassApp() {
               </div>
 
               <div className="form-group">
-                <label htmlFor="reg-recovery">Recovery Code (optional)</label>
+                <label htmlFor="reg-recovery">Recovery Code</label>
                 <input
                   type="text"
                   id="reg-recovery"
                   value={recoveryCode}
                   onChange={(e) => setRecoveryCode(e.target.value)}
                   placeholder="Enter recovery code or leave blank"
+                  required
                 />
                 <small style={{ color: "var(--text-secondary)" }}>
-                  Optional: set a recovery code/phrase and store it safely
+                  Important: set a recovery code/phrase and store it safely
                   offline.
                 </small>
               </div>
@@ -826,8 +827,8 @@ export default function SafePassApp() {
                 style={{ fontSize: "0.8rem", marginTop: "1rem" }}
               >
                 ⚠️ <strong>Zero Knowledge Alert:</strong> All encryption keys
-                are derived client-side. If you forget your master password,
-                your passwords cannot be recovered.
+                are derived client-side. If you forget your master password and
+                recovery code, your passwords cannot be recovered.
               </div>
 
               <button
