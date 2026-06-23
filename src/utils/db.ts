@@ -23,7 +23,7 @@ if (process.env.NODE_ENV === "production") {
       host: process.env.DB_HOST || "127.0.0.1",
       port: parseInt(process.env.DB_PORT || "60700", 10),
       user: process.env.DB_USER || "postgres",
-      password: process.env.DB_PASSWORD || "",
+      password: process.env.DB_PASSWORD || undefined,
       database: process.env.DB_NAME || "safepass",
       max: 10,
       idleTimeoutMillis: 30000,

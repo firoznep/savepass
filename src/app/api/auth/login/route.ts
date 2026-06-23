@@ -20,7 +20,7 @@ export async function POST(request: Request) {
 
     // Find user in database
     const res = await query(
-      "SELECT id, email, password_hash, key_derivation_salt FROM users WHERE email = $1",
+      "SELECT id, email, password_hash, key_derivation_salt, vault_key_ciphertext, vault_key_iv FROM users WHERE email = $1",
       [emailLower],
     );
 
@@ -68,6 +68,8 @@ export async function POST(request: Request) {
         id: user.id,
         email: user.email,
         keyDerivationSalt: user.key_derivation_salt,
+        vaultKeyCiphertext: user.vault_key_ciphertext,
+        vaultKeyIv: user.vault_key_iv,
       },
     });
   } catch (err: any) {

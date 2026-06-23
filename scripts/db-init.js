@@ -42,7 +42,7 @@ function getConfig(database) {
     host: process.env.DB_HOST || "127.0.0.1",
     port: parseInt(process.env.DB_PORT || "60700", 10),
     user: process.env.DB_USER || "postgres",
-    password: process.env.DB_PASSWORD || "",
+    password: process.env.DB_PASSWORD || undefined,
     database,
   };
 }
@@ -55,7 +55,9 @@ function printAuthHelp(err) {
     message.includes("Peer authentication failed")
   ) {
     console.error("");
-    console.error("PostgreSQL rejected the configured user via Ident/peer auth.");
+    console.error(
+      "PostgreSQL rejected the configured user via Ident/peer auth.",
+    );
     console.error(
       "Your app is using DB_HOST=%s DB_PORT=%s DB_USER=%s DB_NAME=%s.",
       process.env.DB_HOST || "127.0.0.1",
@@ -64,21 +66,44 @@ function printAuthHelp(err) {
       process.env.DB_NAME || "safepass",
     );
     console.error("");
-    console.error("For local development, enable password auth for local TCP connections,");
-    console.error("then set a password on the role and put the same value in .env.local:");
-    console.error("  # In pg_hba.conf, use scram-sha-256 or md5 for 127.0.0.1/32");
+    console.error(
+      "For local development, enable password auth for local TCP connections,",
+    );
+    console.error(
+      "then set a password on the role and put the same value in .env.local:",
+    );
+    console.error(
+      "  # In pg_hba.conf, use scram-sha-256 or md5 for 127.0.0.1/32",
+    );
     console.error("  # Example: host all all 127.0.0.1/32 scram-sha-256");
     console.error("  sudo systemctl reload postgresql");
-    console.error("  sudo -u postgres psql -c \"ALTER USER postgres PASSWORD 'postgres';\"");
+    console.error(
+      "  sudo -u postgres psql -c \"ALTER USER postgres PASSWORD 'postgres';\"",
+    );
     console.error("  DB_PASSWORD=postgres");
     console.error("");
-    console.error("Then restart `next dev` so the pool picks up the new env value.");
+    console.error(
+      "Then restart `next dev` so the pool picks up the new env value.",
+    );
   }
 }
 
 async function init() {
   try {
-    loadEnvFile(path.join(__dirname, "..", ".env.local"));
+    const envLocalPath = path.join(__dirname, "..", ".env.local");
+    const envPath = path.join(__dirname, "..", ".env");
+
+    if (fs.existsSync(envLocalPath)) {
+      loadEnvFile(envLocalPath);
+      console.log("Loaded configuration from .env.local");
+    } else if (fs.existsSync(envPath)) {
+      loadEnvFile(envPath);
+      console.log("Loaded configuration from .env");
+    } else {
+      console.log(
+        "No .env.local or .env file found. Using process environment variables.",
+      );
+    }
 
     const databaseName = process.env.DB_NAME || "safepass";
     const adminClient = new Client(getConfig("postgres"));
@@ -99,7 +124,9 @@ async function init() {
     if (dbCheck.rowCount === 0) {
       console.log(`Database '${databaseName}' does not exist. Creating it...`);
       // CREATE DATABASE cannot run inside a transaction block, so we execute it directly
-      await adminClient.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);
+      await adminClient.query(
+        `CREATE DATABASE ${quoteIdentifier(databaseName)}`,
+      );
       console.log(`Database '${databaseName}' created successfully!`);
     } else {
       console.log(`Database '${databaseName}' already exists.`);

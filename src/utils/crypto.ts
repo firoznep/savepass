@@ -12,7 +12,9 @@ function stringToBytes(str: string): Uint8Array {
  * Converts a Uint8Array into a base64 string
  */
 function bytesToBase64(bytes: Uint8Array): string {
-  const binString = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
+  const binString = Array.from(bytes, (byte) => String.fromCharCode(byte)).join(
+    "",
+  );
   return btoa(binString);
 }
 
@@ -26,7 +28,9 @@ function base64ToBytes(base64: string): Uint8Array {
 
 function getSubtleCrypto(): SubtleCrypto {
   if (typeof window === "undefined") {
-    throw new Error("Cryptography functions can only be executed in the browser.");
+    throw new Error(
+      "Cryptography functions can only be executed in the browser.",
+    );
   }
 
   if (!window.isSecureContext || !window.crypto?.subtle) {
@@ -38,6 +42,25 @@ function getSubtleCrypto(): SubtleCrypto {
   return window.crypto.subtle;
 }
 
+async function importAesGcmKey(rawKeyBytes: Uint8Array): Promise<CryptoKey> {
+  return getSubtleCrypto().importKey(
+    "raw",
+    rawKeyBytes as any,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+export async function generateVaultKey(): Promise<{
+  key: CryptoKey;
+  keyBytes: Uint8Array;
+}> {
+  const keyBytes = window.crypto.getRandomValues(new Uint8Array(32));
+  const key = await importAesGcmKey(keyBytes);
+  return { key, keyBytes };
+}
+
 /**
  * Derives both the Encryption Key and the Authentication Hash from the master password and email.
  * This implements the 512-bit key derivation split.
@@ -47,13 +70,17 @@ function getSubtleCrypto(): SubtleCrypto {
  *   - Bytes 0-31: Master Encryption Key (for local AES-GCM)
  *   - Bytes 32-63: Client Authentication Key (hex-encoded to send to server)
  */
-export async function deriveKeys(password: string, email: string): Promise<{
+export async function deriveKeys(
+  password: string,
+  email: string,
+): Promise<{
   encryptionKey: CryptoKey;
   authHash: string;
   keyDerivationSalt: string;
+  encryptionKeyBytes: Uint8Array;
 }> {
   const subtle = getSubtleCrypto();
-  
+
   // Create a unique salt using the user's email to prevent rainbow table attacks
   const saltString = `safepass-salt-v1-${email.toLowerCase().trim()}`;
   const saltBytes = stringToBytes(saltString);
@@ -61,23 +88,23 @@ export async function deriveKeys(password: string, email: string): Promise<{
   // Import the raw master password as a key-deriving-key
   const passwordBytes = stringToBytes(password);
   const baseKey = await subtle.importKey(
-    'raw',
+    "raw",
     passwordBytes as any,
-    { name: 'PBKDF2' },
+    { name: "PBKDF2" },
     false,
-    ['deriveBits', 'deriveKey']
+    ["deriveBits", "deriveKey"],
   );
 
   // Derive 512 bits (64 bytes)
   const derivedBits = await subtle.deriveBits(
     {
-      name: 'PBKDF2',
+      name: "PBKDF2",
       salt: saltBytes as any,
       iterations: 100000,
-      hash: 'SHA-256',
+      hash: "SHA-256",
     },
     baseKey,
-    512
+    512,
   );
 
   const derivedBytes = new Uint8Array(derivedBits);
@@ -86,22 +113,23 @@ export async function deriveKeys(password: string, email: string): Promise<{
 
   // Import the encryption key bytes into a CryptoKey object for AES-GCM
   const encryptionKey = await subtle.importKey(
-    'raw',
+    "raw",
     encryptionKeyBytes as any,
-    { name: 'AES-GCM', length: 256 },
+    { name: "AES-GCM", length: 256 },
     false, // key is not extractable (highly secure!)
-    ['encrypt', 'decrypt']
+    ["encrypt", "decrypt"],
   );
 
   // Convert the authentication key to a hex string to send to the server
   const authHash = Array.from(authKeyBytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 
   return {
     encryptionKey,
     authHash,
     keyDerivationSalt: saltString,
+    encryptionKeyBytes,
   };
 }
 
@@ -112,21 +140,21 @@ export async function deriveKeys(password: string, email: string): Promise<{
  */
 export async function encryptText(
   plaintext: string,
-  encryptionKey: CryptoKey
+  encryptionKey: CryptoKey,
 ): Promise<{ ciphertext: string; iv: string }> {
   const subtle = getSubtleCrypto();
   const plaintextBytes = stringToBytes(plaintext);
-  
+
   // AES-GCM requires a 12-byte IV
   const iv = window.crypto.getRandomValues(new Uint8Array(12));
 
   const ciphertextBuffer = await subtle.encrypt(
     {
-      name: 'AES-GCM',
+      name: "AES-GCM",
       iv: iv as any,
     },
     encryptionKey,
-    plaintextBytes as any
+    plaintextBytes as any,
   );
 
   const ciphertextBytes = new Uint8Array(ciphertextBuffer);
@@ -143,7 +171,7 @@ export async function encryptText(
 export async function decryptText(
   ciphertext: string,
   iv: string,
-  encryptionKey: CryptoKey
+  encryptionKey: CryptoKey,
 ): Promise<string> {
   const subtle = getSubtleCrypto();
   const ciphertextBytes = base64ToBytes(ciphertext);
@@ -151,12 +179,139 @@ export async function decryptText(
 
   const decryptedBuffer = await subtle.decrypt(
     {
-      name: 'AES-GCM',
+      name: "AES-GCM",
       iv: ivBytes as any,
     },
     encryptionKey,
-    ciphertextBytes as any
+    ciphertextBytes as any,
   );
 
   return new TextDecoder().decode(decryptedBuffer);
+}
+
+// Export helpers for use by recovery flow
+export { stringToBytes, bytesToBase64, base64ToBytes };
+
+/**
+ * Derive recovery keys from a user-provided recovery code and email.
+ * Returns the raw derived AES key bytes too so the client can wrap/unwrap the master key.
+ */
+export async function deriveRecoveryKeys(
+  recoveryCode: string,
+  email: string,
+): Promise<{
+  encryptionKey: CryptoKey;
+  encryptionKeyBytes: Uint8Array;
+  authHash: string;
+  keyDerivationSalt: string;
+}> {
+  const subtle = getSubtleCrypto();
+
+  const saltString = `safepass-recovery-salt-v1-${email.toLowerCase().trim()}`;
+  const saltBytes = stringToBytes(saltString);
+
+  const codeBytes = stringToBytes(recoveryCode);
+  const baseKey = await subtle.importKey(
+    "raw",
+    codeBytes as any,
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits", "deriveKey"],
+  );
+
+  const derivedBits = await subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt: saltBytes as any,
+      iterations: 100000,
+      hash: "SHA-256",
+    },
+    baseKey,
+    512,
+  );
+
+  const derivedBytes = new Uint8Array(derivedBits);
+  const encryptionKeyBytes = derivedBytes.slice(0, 32);
+  const authKeyBytes = derivedBytes.slice(32, 64);
+
+  const encryptionKey = await subtle.importKey(
+    "raw",
+    encryptionKeyBytes as any,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+
+  const authHash = Array.from(authKeyBytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  return {
+    encryptionKey,
+    encryptionKeyBytes,
+    authHash,
+    keyDerivationSalt: saltString,
+  };
+}
+
+/**
+ * Wrap the raw master key bytes (base64) with the provided recovery CryptoKey.
+ * Returns {ciphertext, iv} which can be safely stored on the server.
+ */
+export async function wrapMasterKeyWithRecovery(
+  recoveryKey: CryptoKey,
+  masterKeyBytesBase64: string,
+) {
+  return encryptText(masterKeyBytesBase64, recoveryKey);
+}
+
+/**
+ * Unwrap the wrapped master key ciphertext using the recovery key.
+ * Returns {key: CryptoKey, bytes: Uint8Array}
+ */
+export async function unwrapMasterKeyWithRecovery(
+  recoveryKey: CryptoKey,
+  ciphertext: string,
+  iv: string,
+) {
+  const base64 = await decryptText(ciphertext, iv, recoveryKey);
+  const bytes = base64ToBytes(base64);
+  const key = await getSubtleCrypto().importKey(
+    "raw",
+    bytes as any,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+  return { key, bytes };
+}
+
+/**
+ * Wrap the raw vault key bytes (base64) with the password-derived key.
+ */
+export async function wrapVaultKeyWithPassword(
+  passwordKey: CryptoKey,
+  rawVaultKeyBase64: string,
+) {
+  return encryptText(rawVaultKeyBase64, passwordKey);
+}
+
+/**
+ * Unwrap the password-wrapped vault key ciphertext back into the raw vault key.
+ */
+export async function unwrapVaultKeyWithPassword(
+  passwordKey: CryptoKey,
+  ciphertext: string,
+  iv: string,
+) {
+  const base64 = await decryptText(ciphertext, iv, passwordKey);
+  const bytes = base64ToBytes(base64);
+  const key = await getSubtleCrypto().importKey(
+    "raw",
+    bytes as any,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+  return { key, bytes };
 }

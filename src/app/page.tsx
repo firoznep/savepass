@@ -1,7 +1,17 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { deriveKeys, encryptText, decryptText } from "@/utils/crypto";
+import {
+  deriveKeys,
+  deriveRecoveryKeys,
+  encryptText,
+  decryptText,
+  bytesToBase64,
+  wrapMasterKeyWithRecovery,
+  generateVaultKey,
+  wrapVaultKeyWithPassword,
+  unwrapVaultKeyWithPassword,
+} from "@/utils/crypto";
 
 interface ApiVaultItem {
   id: string;
@@ -37,16 +47,25 @@ export default function SafePassApp() {
   );
   const [isAppLoading, setIsAppLoading] = useState(true);
   const [isDerivingKey, setIsDerivingKey] = useState(false);
-  const [viewState, setViewState] = useState<"login" | "register" | "unlock">(
-    "login",
-  );
+  const [viewState, setViewState] = useState<
+    "login" | "register" | "unlock" | "forgot"
+  >("login");
 
   // Auth Form State
   const [email, setEmail] = useState("");
+  const [forgotEmail, setForgotEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [authSuccess, setAuthSuccess] = useState("");
+  const [forgotError, setForgotError] = useState("");
+  const [forgotSuccess, setForgotSuccess] = useState("");
+  const [isSendingForgot, setIsSendingForgot] = useState(false);
+  const [vaultKeyCiphertext, setVaultKeyCiphertext] = useState<string | null>(
+    null,
+  );
+  const [vaultKeyIv, setVaultKeyIv] = useState<string | null>(null);
+  const [recoveryCode, setRecoveryCode] = useState(""); // optional recovery secret (user must store safely)
 
   // Vault Items State
   const [vaultItems, setVaultItems] = useState<DecryptedVaultItem[]>([]);
@@ -83,6 +102,8 @@ export default function SafePassApp() {
         if (res.ok) {
           const data = await res.json();
           setUser(data.user);
+          setVaultKeyCiphertext(data.user.vaultKeyCiphertext || null);
+          setVaultKeyIv(data.user.vaultKeyIv || null);
           setViewState("unlock"); // Session exists, prompt for master password to unlock
           setEmail(data.user.email);
         } else {
@@ -195,19 +216,50 @@ export default function SafePassApp() {
     try {
       // Derive PBKDF2 keys
       const {
-        encryptionKey: derivedKey,
+        encryptionKey: passwordKey,
         authHash,
         keyDerivationSalt,
       } = await deriveKeys(password, email);
 
+      const { key: vaultKey, keyBytes: vaultKeyBytes } =
+        await generateVaultKey();
+      const vaultKeyBase64 = bytesToBase64(vaultKeyBytes);
+      const wrappedVaultKey = await wrapVaultKeyWithPassword(
+        passwordKey,
+        vaultKeyBase64,
+      );
+
+      const payload: any = {
+        email,
+        passwordHash: authHash,
+        keyDerivationSalt,
+        vaultKeyCiphertext: wrappedVaultKey.ciphertext,
+        vaultKeyIv: wrappedVaultKey.iv,
+      };
+
+      // If user provided a recovery code, derive recovery key and wrap the vault key
+      if (recoveryCode && recoveryCode.trim().length > 0) {
+        const {
+          encryptionKey: recoveryKey,
+          authHash: recoveryAuthHash,
+          keyDerivationSalt: recoveryKeyDerivationSalt,
+        } = await deriveRecoveryKeys(recoveryCode, email);
+
+        const wrapped = await wrapMasterKeyWithRecovery(
+          recoveryKey,
+          vaultKeyBase64,
+        );
+
+        payload.recoveryCiphertext = wrapped.ciphertext;
+        payload.recoveryIv = wrapped.iv;
+        payload.recoverySalt = recoveryKeyDerivationSalt;
+        payload.recoveryAuthHash = recoveryAuthHash;
+      }
+
       const response = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email,
-          passwordHash: authHash,
-          keyDerivationSalt,
-        }),
+        body: JSON.stringify(payload),
       });
 
       const data = await response.json();
@@ -234,10 +286,22 @@ export default function SafePassApp() {
         throw new Error(loginData.error || "Login failed.");
       }
 
+      if (!loginData.user.vaultKeyCiphertext || !loginData.user.vaultKeyIv) {
+        throw new Error("Vault key wrapper is missing from server response.");
+      }
+
+      const { key: unwrappedVaultKey } = await unwrapVaultKeyWithPassword(
+        passwordKey,
+        loginData.user.vaultKeyCiphertext,
+        loginData.user.vaultKeyIv,
+      );
+
       setUser(loginData.user);
-      setEncryptionKey(derivedKey);
+      setVaultKeyCiphertext(loginData.user.vaultKeyCiphertext);
+      setVaultKeyIv(loginData.user.vaultKeyIv);
+      setEncryptionKey(unwrappedVaultKey);
       setViewState("unlock"); // Just to update correctly, then fetch vault
-      await fetchVault(derivedKey);
+      await fetchVault(unwrappedVaultKey);
 
       // Clear forms
       setPassword("");
@@ -299,9 +363,21 @@ export default function SafePassApp() {
         throw new Error(loginData.error || "Invalid credentials.");
       }
 
+      if (!loginData.user.vaultKeyCiphertext || !loginData.user.vaultKeyIv) {
+        throw new Error("Vault key wrapper is missing from server response.");
+      }
+
+      const { key: unwrappedVaultKey } = await unwrapVaultKeyWithPassword(
+        derivedKey,
+        loginData.user.vaultKeyCiphertext,
+        loginData.user.vaultKeyIv,
+      );
+
       setUser(loginData.user);
-      setEncryptionKey(derivedKey);
-      await fetchVault(derivedKey);
+      setVaultKeyCiphertext(loginData.user.vaultKeyCiphertext);
+      setVaultKeyIv(loginData.user.vaultKeyIv);
+      setEncryptionKey(unwrappedVaultKey);
+      await fetchVault(unwrappedVaultKey);
 
       // Clear forms
       setPassword("");
@@ -309,6 +385,40 @@ export default function SafePassApp() {
       setAuthError(err.message || "Authentication failed.");
     } finally {
       setIsDerivingKey(false);
+    }
+  };
+
+  const handleForgot = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setForgotError("");
+    setForgotSuccess("");
+
+    if (!forgotEmail) {
+      setForgotError("Email is required to request a password reset.");
+      return;
+    }
+
+    setIsSendingForgot(true);
+    try {
+      const response = await fetch("/api/auth/forgot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "Unable to send reset email.");
+      }
+
+      setForgotSuccess(
+        "If that email exists, a password reset link has been sent.",
+      );
+      setForgotEmail("");
+    } catch (err: any) {
+      setForgotError(err.message || "An error occurred sending reset email.");
+    } finally {
+      setIsSendingForgot(false);
     }
   };
 
@@ -524,7 +634,9 @@ export default function SafePassApp() {
                 ? "Your personal vault is locked"
                 : viewState === "register"
                   ? "Create a secure personal vault"
-                  : "Access your credentials vault"}
+                  : viewState === "forgot"
+                    ? "Reset your password"
+                    : "Access your credentials vault"}
             </div>
           </div>
 
@@ -535,8 +647,63 @@ export default function SafePassApp() {
           {authSuccess && (
             <div className="alert alert-success">{authSuccess}</div>
           )}
+          {forgotError && (
+            <div className="alert alert-danger">{forgotError}</div>
+          )}
+          {forgotSuccess && (
+            <div className="alert alert-success">{forgotSuccess}</div>
+          )}
 
-          {viewState === "unlock" ? (
+          {viewState === "forgot" ? (
+            <form onSubmit={handleForgot}>
+              <div className="form-group">
+                <label htmlFor="forgot-email">Email Address</label>
+                <input
+                  type="email"
+                  id="forgot-email"
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  placeholder="you@domain.com"
+                  required
+                />
+              </div>
+
+              <div className="alert alert-info" style={{ fontSize: "0.9rem" }}>
+                Enter your account email and we will send a password reset link.
+              </div>
+
+              <button
+                type="submit"
+                className="btn btn-primary"
+                style={{ width: "100%", marginTop: "1rem" }}
+                disabled={isSendingForgot}
+              >
+                {isSendingForgot ? (
+                  <>
+                    <span className="spinner"></span> Sending Email...
+                  </>
+                ) : (
+                  "Send Reset Link"
+                )}
+              </button>
+
+              <div className="auth-footer">
+                Remembered your password?
+                <a
+                  href="#"
+                  className="auth-link"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setViewState("login");
+                    setForgotError("");
+                    setForgotSuccess("");
+                  }}
+                >
+                  Sign In
+                </a>
+              </div>
+            </form>
+          ) : viewState === "unlock" ? (
             <form onSubmit={handleLogin}>
               <div className="alert alert-info">
                 🔒 Your session is active. Enter your Master Password to decrypt
@@ -569,6 +736,22 @@ export default function SafePassApp() {
                   "Decrypt & Unlock Vault"
                 )}
               </button>
+
+              <div className="auth-footer" style={{ marginTop: "1rem" }}>
+                <a
+                  href="#"
+                  className="auth-link"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setViewState("forgot");
+                    setForgotEmail(email);
+                    setAuthError("");
+                    setAuthSuccess("");
+                  }}
+                >
+                  Forgot password?
+                </a>
+              </div>
 
               <div
                 style={{
@@ -621,6 +804,21 @@ export default function SafePassApp() {
                   placeholder="Repeat master password"
                   required
                 />
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="reg-recovery">Recovery Code (optional)</label>
+                <input
+                  type="text"
+                  id="reg-recovery"
+                  value={recoveryCode}
+                  onChange={(e) => setRecoveryCode(e.target.value)}
+                  placeholder="Enter recovery code or leave blank"
+                />
+                <small style={{ color: "var(--text-secondary)" }}>
+                  Optional: set a recovery code/phrase and store it safely
+                  offline.
+                </small>
               </div>
 
               <div
@@ -701,6 +899,22 @@ export default function SafePassApp() {
                   "Open Secure Vault"
                 )}
               </button>
+
+              <div className="auth-footer" style={{ marginTop: "1rem" }}>
+                <a
+                  href="#"
+                  className="auth-link"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setViewState("forgot");
+                    setForgotEmail(email);
+                    setAuthError("");
+                    setAuthSuccess("");
+                  }}
+                >
+                  Forgot password?
+                </a>
+              </div>
 
               <div className="auth-footer">
                 First time?
